@@ -45,6 +45,38 @@ const TAB_OF = {
 
 const unit = () => (user && user.unit) || 'lb';
 
+/* ============================ Beginner-mode terminology ============================ */
+const TERMS = {
+  one_rm: {
+    tech: 'Estimated 1RM', short_tech: 'Est. 1RM',
+    plain: 'Strength score (your estimated max)', short: 'Strength score',
+    help: 'An estimate of the most weight you could lift for a single rep, worked out from your reps and weight.',
+  },
+  volume: {
+    tech: 'Volume', plain: 'Total weight lifted',
+    help: 'Reps multiplied by weight, added up across the session — a measure of how much total work you did.',
+  },
+  top_set: {
+    tech: 'Top set', plain: 'Best set',
+    help: 'Your heaviest work set — the most weight you lifted for the reps that day.',
+  },
+};
+const beginnerOn = () => !user || user.beginner_mode !== false;
+const termText = (k) => (beginnerOn() ? TERMS[k].plain : TERMS[k].tech);
+const termShort = (k) => (beginnerOn() ? (TERMS[k].short || TERMS[k].plain) : (TERMS[k].short_tech || TERMS[k].tech));
+function helpDot(k) {
+  return h('span', {
+    class: 'help', role: 'button', tabindex: '0', title: 'What does this mean?',
+    onClick: (e) => { e.stopPropagation(); e.preventDefault(); sheet({ title: termText(k), body: h('p', { class: 'muted' }, TERMS[k].help) }); },
+  }, '?');
+}
+function metric(k, trailing) {
+  return h('span', { class: 'metric' }, termText(k), trailing ? ' ' + trailing : null, helpDot(k));
+}
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const dayName = (wd) => DAY_NAMES[wd] || '';
+
 /* ============================ Boot & auth ============================ */
 function showApp() { els.login.hidden = true; els.main.hidden = false; }
 function showLogin() { els.main.hidden = true; els.login.hidden = false; }
@@ -188,8 +220,8 @@ const activeExercises = () => (exercisesCache || []).filter((e) => !e.is_archive
 
 /* ============================ HOME ============================ */
 RENDER.home = async function () {
-  const [stats, goals, workouts] = await Promise.all([
-    api.get('/stats'), api.get('/goals'), api.get('/workouts'),
+  const [stats, goals, workouts, split] = await Promise.all([
+    api.get('/stats'), api.get('/goals'), api.get('/workouts'), api.get('/split').catch(() => null),
   ]);
   const wrap = h('div', null);
 
@@ -197,6 +229,12 @@ RENDER.home = async function () {
   wrap.appendChild(h('div', { style: { margin: '2px 2px 14px' } },
     h('h3', { style: { fontSize: '22px' } }, `Hey ${name} 👋`),
     h('div', { class: 'muted tiny' }, new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }))));
+
+  // Today's plan (from the weekly split)
+  if (split && split.length) {
+    const day = split.find((d) => d.weekday === new Date().getDay());
+    if (day) wrap.appendChild(todayCard(day));
+  }
 
   // Streak
   const st = stats.streak || { current: 0, longest: 0 };
@@ -212,7 +250,7 @@ RENDER.home = async function () {
   wrap.appendChild(h('div', { class: 'stats' },
     statTile(t.this_week, 'This week'),
     statTile(t.workouts, 'Total workouts'),
-    statTile(fmtCompact(t.volume), 'Volume', unit()),
+    statTile(fmtCompact(t.volume), metric('volume'), unit()),
     statTile(t.exercises, 'Machines'),
   ));
 
@@ -266,9 +304,39 @@ function goalLabel(g) {
     case 'weekly_workouts': return `${g.target_value} workouts / week`;
     case 'total_workouts': return `${g.target_value} total workouts`;
     case 'exercise_weight': return `${g.exercise_name}: ${fmtNum(g.target_value)} ${unit()}`;
-    case 'exercise_1rm': return `${g.exercise_name}: ${fmtNum(g.target_value)} ${unit()} 1RM`;
+    case 'exercise_1rm': return `${g.exercise_name}: ${fmtNum(g.target_value)} ${unit()} ${beginnerOn() ? 'strength score' : '1RM'}`;
     default: return 'Goal';
   }
+}
+
+function todayCard(day) {
+  const card = h('div', { class: 'card today' });
+  card.appendChild(h('div', { class: 'kicker' }, `Today · ${dayName(day.weekday)}`));
+
+  if (day.kind === 'rest' || !day.exercises.length) {
+    card.appendChild(h('div', { class: 'rest-msg' }, '😴 Rest day — recover up.'));
+    if (day.title && !/^rest$/i.test(day.title)) card.appendChild(h('div', { class: 'muted tiny' }, day.title));
+    return card;
+  }
+
+  card.appendChild(h('h3', { style: { marginTop: '2px' } }, day.title || 'Workout'));
+  const chips = h('div', { class: 'today-chips' });
+  day.exercises.forEach((e) => chips.appendChild(h('span', { class: 'today-chip' }, e.name)));
+  card.appendChild(chips);
+
+  const draftId = localStorage.getItem(DRAFT_KEY);
+  card.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => (draftId ? navigate('log') : startTodayWorkout(day)) },
+    draftId ? '▶︎ Continue workout' : `Start ${day.title || "today's"} workout`));
+  return card;
+}
+
+async function startTodayWorkout(day) {
+  try {
+    const w = await api.post('/workouts', { performed_on: todayISO(), title: day.title || null });
+    localStorage.setItem(DRAFT_KEY, String(w.id));
+    session = { workoutId: w.id, exerciseIds: day.exercises.map((e) => e.id) };
+    navigate('log');
+  } catch (err) { toast(err.message, 'err'); }
 }
 
 /* ============================ LOG / WORKOUT LOGGER ============================ */
@@ -303,6 +371,13 @@ RENDER.log = async function () {
   });
   const exIds = [...new Set([...byEx.keys(), ...session.exerciseIds])];
 
+  // "Try next time" suggestions (based on the previous session, not this draft).
+  const suggestions = {};
+  await Promise.all(exIds.map(async (exId) => {
+    try { suggestions[exId] = await api.get(`/exercises/${exId}/suggestion?exclude=${workout.id}`); }
+    catch { suggestions[exId] = { has: false }; }
+  }));
+
   const wrap = h('div', null);
   wrap.appendChild(h('div', { class: 'card' },
     h('div', { class: 'row-between' },
@@ -317,7 +392,7 @@ RENDER.log = async function () {
   exIds.forEach((exId) => {
     const ex = (exercisesCache || []).find((e) => e.id === exId);
     const sets = (byEx.get(exId) || []).sort((a, b) => a.set_index - b.set_index);
-    wrap.appendChild(exerciseBlock(workout.id, ex, sets));
+    wrap.appendChild(exerciseBlock(workout.id, ex, sets, suggestions[exId]));
   });
 
   wrap.appendChild(h('button', { class: 'btn btn-block', style: { marginTop: '4px' }, onClick: () => pickExerciseSheet(workout.id) }, '＋ Add exercise'));
@@ -329,12 +404,19 @@ RENDER.log = async function () {
   return wrap;
 };
 
-function exerciseBlock(workoutId, ex, sets) {
+function exerciseBlock(workoutId, ex, sets, suggestion) {
   const last = sets[sets.length - 1];
   const block = h('div', { class: 'ex-block' });
   block.appendChild(h('h4', null,
     h('span', null, ex ? ex.name : 'Exercise'),
     ex && ex.equipment ? h('span', { class: 'badge' }, ex.equipment) : null));
+
+  // Gentle "try next time" hint from the previous session.
+  if (suggestion && suggestion.has) {
+    const L = suggestion.last, S = suggestion.suggestion;
+    block.appendChild(h('div', { class: 'hint' },
+      `Last time: ${fmtNum(L.weight)} ${unit()} × ${L.reps} — try ${fmtNum(S.weight)} ${unit()} × ${S.reps}`));
+  }
 
   sets.forEach((s, i) => {
     block.appendChild(h('div', { class: 'set-line' },
@@ -344,9 +426,15 @@ function exerciseBlock(workoutId, ex, sets) {
       h('button', { class: 'del', title: 'Delete set', onClick: () => deleteSet(s.id) }, '×')));
   });
 
-  // Add-set row
-  const reps = h('input', { inputmode: 'numeric', placeholder: 'reps', value: last ? fmtNum(last.reps) : '' });
-  const wt = h('input', { inputmode: 'decimal', placeholder: unit(), value: last ? fmtNum(last.weight) : '' });
+  // Add-set row — prefill from this session's last set, else the suggestion.
+  let preReps = last ? fmtNum(last.reps) : '';
+  let preWt = last ? fmtNum(last.weight) : '';
+  if (!last && suggestion && suggestion.has) {
+    preReps = String(suggestion.suggestion.reps);
+    preWt = fmtNum(suggestion.suggestion.weight);
+  }
+  const reps = h('input', { inputmode: 'numeric', placeholder: 'reps', value: preReps });
+  const wt = h('input', { inputmode: 'decimal', placeholder: unit(), value: preWt });
   const add = async () => {
     const r = parseFloat(reps.value), w = parseFloat(wt.value);
     if (!reps.value && !wt.value) { toast('Enter reps and weight', 'err'); return; }
@@ -503,13 +591,24 @@ async function deleteWorkout(id) {
 
 /* ============================ PROGRESS ============================ */
 RENDER.progress = async function (params) {
-  const [stats, exercises] = await Promise.all([api.get('/stats'), getExercises()]);
+  const [stats, exercises, insights] = await Promise.all([
+    api.get('/stats'), getExercises(), api.get('/insights').catch(() => null),
+  ]);
   const wrap = h('div', null);
+
+  // Plain-English summaries
+  if (insights) {
+    const card = h('div', { class: 'card' });
+    card.appendChild(h('div', { class: 'card-title' }, 'In plain English'));
+    card.appendChild(h('p', { class: 'insight' }, weekSentence(insights.week)));
+    insights.exercises.slice(0, 4).forEach((e) => card.appendChild(h('p', { class: 'insight' }, exSentence(e))));
+    wrap.appendChild(card);
+  }
 
   // Weekly volume
   if (stats.volume_by_week && stats.volume_by_week.length) {
     wrap.appendChild(h('div', { class: 'card' },
-      h('div', { class: 'card-title' }, `Weekly volume (${unit()})`),
+      h('div', { class: 'card-title' }, metric('volume', '(' + unit() + ')')),
       barChart(stats.volume_by_week.map((p) => ({ label: fmtDate(p.week), value: p.volume })))));
   }
 
@@ -519,7 +618,7 @@ RENDER.progress = async function (params) {
     const list = h('div', null);
     stats.prs.forEach((p) => list.appendChild(row({
       title: p.name,
-      sub: `Best est. 1RM ${fmtNum(p.best_1rm)} ${unit()}`,
+      sub: `${termShort('one_rm')} ${fmtNum(p.best_1rm)} ${unit()}`,
       meta: `${fmtNum(p.max_weight)} ${unit()}`,
       onClick: () => navigate('progress', { ex: p.id }),
       chev: false,
@@ -546,15 +645,33 @@ RENDER.progress = async function (params) {
     if (!hist.series.length) { box.appendChild(empty('—', 'No data yet')); return; }
     box.appendChild(h('div', { class: 'row-between', style: { margin: '4px 0 10px' } },
       h('span', { class: 'badge amber' }, `PR ${fmtNum(hist.pr.max_weight)} ${unit()}`),
-      h('span', { class: 'badge' }, `Best 1RM ${fmtNum(hist.pr.best_1rm)} ${unit()}`)));
-    box.appendChild(h('div', { class: 'card-title' }, 'Top set weight'));
+      h('span', { class: 'badge' }, `${termShort('one_rm')} ${fmtNum(hist.pr.best_1rm)} ${unit()} `, helpDot('one_rm'))));
+    box.appendChild(h('div', { class: 'card-title' }, metric('top_set', 'weight')));
     box.appendChild(lineChart(hist.series.filter((p) => p.top_weight != null).map((p) => ({ label: fmtDate(p.date), value: p.top_weight }))));
-    box.appendChild(h('div', { class: 'card-title', style: { marginTop: '14px' } }, 'Session volume'));
+    box.appendChild(h('div', { class: 'card-title', style: { marginTop: '14px' } }, h('span', null, termText('volume'), ' · per session')));
     box.appendChild(barChart(hist.series.slice(-12).map((p) => ({ label: fmtDate(p.date), value: p.volume }))));
   }).catch((err) => { const box = $('exChart'); if (box) { clear(box); box.appendChild(errorNote(err.message)); } });
 
   return wrap;
 };
+
+function weekSentence(week) {
+  const t = week.this, l = week.last;
+  if (t === 0 && l === 0) return 'No workouts logged yet this week — your first one starts a streak.';
+  let s = `You trained ${t} time${t === 1 ? '' : 's'} this week`;
+  if (t > l) s += l > 0 ? `, up from ${l} last week 💪` : ' — nice start! 💪';
+  else if (t === l) s += ', same as last week.';
+  else s += `, ${l} last week — let's catch up.`;
+  return s.endsWith('.') || s.endsWith('💪') ? s : s + '.';
+}
+
+function exSentence(e) {
+  const u = unit();
+  if (e.sessions <= 1) return `First session logged for ${e.name} — nice start!`;
+  if (e.delta > 0) return `You're getting stronger on ${e.name} — up ${fmtNum(e.delta)} ${u} since you started.`;
+  if (e.delta === 0) return `Holding steady on ${e.name} — same best set as when you started. Try one more rep next time.`;
+  return `${e.name} dipped a little from your best — totally normal, just keep showing up.`;
+}
 
 /* ============================ PHOTOS ============================ */
 let photoSelect = null; // Set of ids when selecting
@@ -774,7 +891,7 @@ function openGoalForm() {
     ['weekly_workouts', 'Workouts per week'],
     ['total_workouts', 'Total workouts'],
     ['exercise_weight', 'Reach a weight (exercise)'],
-    ['exercise_1rm', 'Estimated 1RM (exercise)'],
+    ['exercise_1rm', beginnerOn() ? 'Strength score (exercise)' : 'Estimated 1RM (exercise)'],
   ];
   const kind = h('select', null, ...KINDS.map(([v, l]) => h('option', { value: v }, l)));
   const exWrap = h('div', { hidden: true });
@@ -811,6 +928,7 @@ function openGoalActions(g) {
 /* ============================ SETTINGS ============================ */
 RENDER.settings = async function () {
   const wrap = h('div', null);
+  const split = await api.get('/split').catch(() => []);
 
   // Display name
   const dn = h('input', { value: user.display_name || '', placeholder: 'Display name' });
@@ -819,6 +937,29 @@ RENDER.settings = async function () {
     h('button', { class: 'btn btn-sm', onClick: async () => {
       try { const r = await api.patch('/me', { display_name: dn.value.trim() || null }); user = r.user; toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); }
     } }, 'Save')));
+
+  // Beginner mode
+  const bm = (on) => h('button', { class: 'pill' + (beginnerOn() === on ? ' active' : ''), onClick: async () => {
+    try { const r = await api.patch('/me', { beginner_mode: on }); user = r.user; refresh(); } catch (e) { toast(e.message, 'err'); }
+  } }, on ? 'On' : 'Off');
+  wrap.appendChild(h('div', { class: 'card' },
+    h('div', { class: 'card-title' }, 'Beginner mode'),
+    h('div', { class: 'muted tiny', style: { marginBottom: '10px' } }, 'Plain-language labels with quick (?) explanations. Turn off to show technical terms.'),
+    h('div', { class: 'pill-grp' }, bm(true), bm(false))));
+
+  // My split
+  const splitCard = h('div', { class: 'card' });
+  splitCard.appendChild(h('div', { class: 'card-title' }, 'My split'));
+  [1, 2, 3, 4, 5, 6, 0].forEach((wd) => {
+    const day = split.find((d) => d.weekday === wd) || { weekday: wd, kind: 'rest', title: 'Rest', exercises: [] };
+    const isRest = day.kind === 'rest' || !day.exercises.length;
+    splitCard.appendChild(row({
+      title: `${dayName(wd)}${day.title ? ' · ' + day.title : ''}`,
+      sub: isRest ? 'Rest day' : day.exercises.map((e) => e.name).join(', '),
+      onClick: () => openSplitEditor(day),
+    }));
+  });
+  wrap.appendChild(splitCard);
 
   // Units
   const mk = (u) => h('button', { class: 'pill' + (unit() === u ? ' active' : ''), onClick: async () => {
@@ -840,6 +981,38 @@ RENDER.settings = async function () {
 
   return wrap;
 };
+
+async function openSplitEditor(day) {
+  await getExercises();
+  const selected = day.exercises.map((e) => e.id);
+  const title = h('input', { value: day.title || '', placeholder: 'Day name (e.g. Upper, Lower, Rest)' });
+  const grp = h('div', { class: 'pill-grp' });
+  const draw = () => {
+    clear(grp);
+    const list = activeExercises();
+    if (!list.length) { grp.appendChild(h('p', { class: 'muted tiny' }, 'Add exercises first in Machines & Exercises.')); return; }
+    list.forEach((ex) => {
+      const on = selected.includes(ex.id);
+      grp.appendChild(h('button', { class: 'pill' + (on ? ' active' : ''), onClick: () => {
+        const i = selected.indexOf(ex.id);
+        if (i >= 0) selected.splice(i, 1); else selected.push(ex.id);
+        draw();
+      } }, ex.name));
+    });
+  };
+  draw();
+  const save = async () => {
+    try {
+      await api.put('/split/' + day.weekday, { title: title.value.trim() || null, exercise_ids: selected });
+      s.close(); toast('Saved', 'ok'); refresh();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const s = sheet({ title: `Edit ${dayName(day.weekday)}`, body: h('div', { class: 'stack' },
+    field('Day name', title),
+    h('div', { class: 'muted tiny' }, 'Tap to add or remove exercises. Select none for a rest day.'),
+    grp,
+    h('button', { class: 'btn btn-primary btn-block', onClick: save }, 'Save day')) });
+}
 
 /* ============================ ABOUT ============================ */
 RENDER.about = async function () {

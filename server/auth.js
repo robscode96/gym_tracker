@@ -15,7 +15,13 @@ export function signToken(user) {
 }
 
 export function publicUser(u) {
-  return { id: u.id, username: u.username, display_name: u.display_name, unit: u.unit };
+  return {
+    id: u.id,
+    username: u.username,
+    display_name: u.display_name,
+    unit: u.unit,
+    beginner_mode: u.beginner_mode == null ? true : !!u.beginner_mode,
+  };
 }
 
 export async function authenticate(username, password) {

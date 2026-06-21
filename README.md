@@ -22,6 +22,13 @@ Built to deploy on **GitHub → Railway** with zero build step.
 - **Installable PWA** — add to your home screen for a full-screen, offline-capable app that **auto-updates on launch** whenever you deploy a new version.
 - **lb / kg** unit toggle, display name, and password change in Settings.
 
+### 🌱 Beginner-friendly
+
+- **Beginner Mode** (on by default) — swaps lifter jargon for plain language with a tap-to-read **(?)** explanation on each: *Estimated 1RM* → **Strength score (your estimated max)**, *Volume* → **Total weight lifted**, *Top set* → **Best set**. Turn it off in Settings to see the technical terms.
+- **"Try next time" suggestions** — on the logging screen each exercise shows a gentle hint from your last session using simple 8–12 rep double progression (e.g. *"Last time: 100 lb × 8 — try 100 lb × 9"*) and pre-fills the next set. Since you train on pin-loaded machines, when the next weight jump would be large it suggests adding a rep instead of adding weight.
+- **Plain-English progress** — the Progress screen translates your numbers into a sentence or two per exercise (e.g. *"You're getting stronger on Chest Press — up 15 lb since you started"*, *"You trained 3 times this week, same as last week"*).
+- **"Today" guide with your split pre-loaded** — an upper/lower split (Mon & Fri upper, Wed & Sun lower, Tue/Thu/Sat rest) is seeded on first run. The Home screen shows a **Today** card with the planned exercises and a one-tap button to start logging them; rest days show a "recover up" message. Edit any day under **Settings → My split**.
+
 Default login: **`Robert` / `1`** (change the password any time in Settings).
 
 ---

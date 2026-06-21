@@ -2,7 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { query } from '../db.js';
 import { publicUser } from '../auth.js';
-import { asyncH, bad } from '../util.js';
+import { asyncH, bad, toBool } from '../util.js';
 
 const router = Router();
 
@@ -21,6 +21,7 @@ router.patch('/me', asyncH(async (req, res) => {
     const unit = req.body.unit === 'kg' ? 'kg' : 'lb';
     fields.push(`unit = $${i++}`); vals.push(unit);
   }
+  if ('beginner_mode' in (req.body || {})) { fields.push(`beginner_mode = $${i++}`); vals.push(toBool(req.body.beginner_mode)); }
   if (!fields.length) return bad(res, 'Nothing to update');
   vals.push(req.userId);
   const { rows } = await query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`, vals);

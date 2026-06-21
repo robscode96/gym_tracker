@@ -279,3 +279,32 @@ textarea { resize: vertical; min-height: 70px; }
 .fab-row { position: sticky; bottom: 0; }
 .divider { height: 1px; background: var(--border); margin: 14px 0; }
 a { color: var(--accent); }
+
+/* ---------- Beginner-mode term + help dot ---------- */
+.metric { display: inline-flex; align-items: center; gap: 5px; }
+.help {
+  display: inline-grid; place-items: center;
+  width: 17px; height: 17px; flex: none;
+  border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; line-height: 1; font-weight: 700;
+  text-transform: none; cursor: pointer; vertical-align: middle;
+}
+.help:hover { color: var(--text); border-color: var(--accent); }
+
+/* ---------- "Try next time" hint ---------- */
+.hint {
+  font-size: 13px; color: var(--accent-2);
+  background: #2a2008; border: 1px solid #5a4516; border-radius: 9px;
+  padding: 7px 11px; margin-bottom: 10px;
+}
+
+/* ---------- Plain-English insights ---------- */
+.insight { margin: 0 0 9px; font-size: 14.5px; line-height: 1.5; }
+.insight:last-child { margin-bottom: 0; }
+
+/* ---------- Today card ---------- */
+.today { border-color: #284058; background: linear-gradient(135deg, #0e2336, #122c41); }
+.today .kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--blue); }
+.today-chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
+.today-chip { font-size: 13px; padding: 6px 11px; border-radius: 999px; background: rgba(255,255,255,.06); border: 1px solid var(--border); }
+.rest-msg { font-size: 15px; margin: 8px 0 2px; }

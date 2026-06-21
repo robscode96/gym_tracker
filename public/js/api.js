@@ -34,6 +34,7 @@ async function req(method, path, body) {
 export const api = {
   get: (p) => req('GET', p),
   post: (p, b) => req('POST', p, b),
+  put: (p, b) => req('PUT', p, b),
   patch: (p, b) => req('PATCH', p, b),
   del: (p) => req('DELETE', p),
   login: (username, password) => req('POST', '/login', { username, password }),

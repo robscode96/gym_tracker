@@ -30,9 +30,19 @@ const HISTORY = {
            { date: '2026-06-21', top_weight: 175, est_1rm: 210, volume: 5100, top_reps: 6 }],
   pr: { max_weight: 175, best_1rm: 210 },
 };
+const TODAY_WD = new Date().getDay();
+const SPLIT = [0, 1, 2, 3, 4, 5, 6].map((d) => (d === TODAY_WD
+  ? { weekday: d, title: 'Upper', kind: 'workout', exercises: [{ id: 3, name: 'Chest Press' }, { id: 4, name: 'Leg Press' }] }
+  : { weekday: d, title: 'Rest', kind: 'rest', exercises: [] }));
+const INSIGHTS = {
+  week: { this: 2, last: 1 },
+  exercises: [{ id: 3, name: 'Chest Press', sessions: 2, first_top: 100, last_top: 115, delta: 15, last_date: '2026-06-21' }],
+};
 const ROUTES = {
-  'GET /api/me': { user: { id: 1, username: 'Robert', display_name: 'Robert', unit: 'lb' } },
+  'GET /api/me': { user: { id: 1, username: 'Robert', display_name: 'Robert', unit: 'lb', beginner_mode: true } },
   'GET /api/ai/status': { enabled: false },
+  'GET /api/split': SPLIT,
+  'GET /api/insights': INSIGHTS,
   'GET /api/stats': STATS,
   'GET /api/goals': [{ id: 1, kind: 'weekly_workouts', target_value: 4, current: 1, pct: 25, reached: false, is_active: true }],
   'GET /api/workouts': [{ id: 7, title: 'Push day', performed_on: '2026-06-21', exercise_count: 3, set_count: 12, volume: 6150 }],
@@ -72,6 +82,9 @@ assert(/Total workouts/.test(view.textContent), 'home shows stat tiles');
 assert(/week.+streak|streak/.test(view.textContent), 'home shows streak');
 assert(/Push day/.test(view.textContent), 'home shows recent workout');
 assert(window.document.querySelector('.tab.active')?.dataset.tab === 'home', 'home tab active');
+assert(/Today ·/.test(view.textContent) && /Upper/.test(view.textContent), 'home shows Today card');
+assert(/Total weight lifted/.test(view.textContent), 'beginner-mode volume label applied');
+assert(view.querySelector('.help') !== null, 'help (?) dot rendered');
 
 console.log('--- Progress (charts) ---');
 window.document.querySelector('[data-tab="progress"]').click();
@@ -79,15 +92,24 @@ await tick(80);
 assert(view.querySelector('svg.chart') !== null, 'progress renders an SVG chart');
 assert(view.querySelector('path.line') !== null, 'progress line chart drawn');
 assert(/Personal records/.test(view.textContent), 'progress shows PRs');
+assert(/In plain English/.test(view.textContent), 'progress shows plain-English card');
+assert(/stronger on Chest Press|up 15/.test(view.textContent), 'progress shows exercise summary');
 
 console.log('--- Photos (AI off) ---');
 window.document.querySelector('[data-tab="photos"]').click();
 await tick(60);
 assert(/ANTHROPIC_API_KEY/.test(view.textContent), 'photos shows AI-disabled hint');
 
-console.log('--- More + Settings ---');
+console.log('--- More ---');
 window.document.querySelector('[data-tab="more"]').click();
 await tick(40);
 assert(/Machines & Exercises/.test(view.textContent), 'more menu renders');
+
+console.log('--- Settings (split + beginner) ---');
+[...view.querySelectorAll('.row')].find((r) => /Settings/.test(r.textContent))?.click();
+await tick(60);
+assert(/Beginner mode/.test(view.textContent), 'settings shows beginner-mode toggle');
+assert(/My split/.test(view.textContent), 'settings shows My split');
+assert(/Monday/.test(view.textContent), 'settings split lists weekdays');
 
 console.log(process.exitCode ? '\nSMOKE TEST FAILED' : '\nSMOKE TEST PASSED');

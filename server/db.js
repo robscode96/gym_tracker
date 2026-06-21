@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   display_name  TEXT,
   unit          TEXT NOT NULL DEFAULT 'lb',
+  beginner_mode BOOLEAN NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -138,17 +139,48 @@ CREATE INDEX IF NOT EXISTS idx_sets_exercise  ON sets(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_workouts_user  ON workouts(user_id, performed_on);
 CREATE INDEX IF NOT EXISTS idx_exercises_user ON exercises(user_id);
 CREATE INDEX IF NOT EXISTS idx_photos_user    ON photos(user_id, taken_on);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS beginner_mode BOOLEAN NOT NULL DEFAULT TRUE;
+
+CREATE TABLE IF NOT EXISTS split_days (
+  id                SERIAL PRIMARY KEY,
+  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  weekday           SMALLINT NOT NULL,
+  title             TEXT,
+  kind              TEXT NOT NULL DEFAULT 'workout',
+  exercise_ids_json TEXT NOT NULL DEFAULT '[]',
+  UNIQUE (user_id, weekday)
+);
 `;
 
-// A friendly starter set of machine-focused exercises, added only on first run.
-const STARTER_EXERCISES = [
-  ['Leg Press', 'Legs', 'Machine'],
-  ['Lat Pulldown', 'Back', 'Machine'],
-  ['Chest Press', 'Chest', 'Machine'],
-  ['Seated Cable Row', 'Back', 'Cable'],
-  ['Leg Curl', 'Legs', 'Machine'],
-  ['Shoulder Press', 'Shoulders', 'Machine'],
-];
+// Default weekly split (pin-loaded machine movements).
+const UPPER = ['Chest Press', 'Seated Row', 'Shoulder Press', 'Lat Pulldown', 'Bicep Curl', 'Tricep Pushdown'];
+const LOWER = ['Leg Press', 'Leg Extension', 'Seated Leg Curl', 'Calf Raise', 'Hip Abduction'];
+
+const EXERCISE_META = {
+  'Chest Press': ['Chest', 'Machine'],
+  'Seated Row': ['Back', 'Machine'],
+  'Shoulder Press': ['Shoulders', 'Machine'],
+  'Lat Pulldown': ['Back', 'Machine'],
+  'Bicep Curl': ['Arms', 'Machine'],
+  'Tricep Pushdown': ['Arms', 'Machine'],
+  'Leg Press': ['Legs', 'Machine'],
+  'Leg Extension': ['Legs', 'Machine'],
+  'Seated Leg Curl': ['Legs', 'Machine'],
+  'Calf Raise': ['Legs', 'Machine'],
+  'Hip Abduction': ['Glutes', 'Machine'],
+};
+
+// Keyed by JS getDay() — 0=Sun .. 6=Sat.
+const SPLIT_TEMPLATE = {
+  0: { title: 'Lower', kind: 'workout', names: LOWER },
+  1: { title: 'Upper', kind: 'workout', names: UPPER },
+  2: { title: 'Rest (delivery route day)', kind: 'rest', names: [] },
+  3: { title: 'Lower', kind: 'workout', names: LOWER },
+  4: { title: 'Rest', kind: 'rest', names: [] },
+  5: { title: 'Upper', kind: 'workout', names: UPPER },
+  6: { title: 'Rest (delivery route day)', kind: 'rest', names: [] },
+};
 
 async function runMigrations() {
   // PGlite executes one statement per call; split on ';' for portability.
@@ -166,19 +198,51 @@ async function seedUser() {
   if (existing.rows.length > 0) return;
 
   const hash = bcrypt.hashSync(password, 10);
-  const inserted = await query(
-    'INSERT INTO users (username, password_hash, display_name) VALUES ($1, $2, $3) RETURNING id',
+  await query(
+    'INSERT INTO users (username, password_hash, display_name) VALUES ($1, $2, $3)',
     [username, hash, username]
   );
-  const userId = inserted.rows[0].id;
+  console.log(`[db] seeded user "${username}"`);
+}
 
-  for (const [name, muscle, equipment] of STARTER_EXERCISES) {
+async function findOrCreateExercise(userId, name) {
+  const found = await query(
+    'SELECT id FROM exercises WHERE user_id = $1 AND lower(name) = lower($2) ORDER BY id LIMIT 1',
+    [userId, name]
+  );
+  if (found.rows.length) return found.rows[0].id;
+  const [muscle, equipment] = EXERCISE_META[name] || [null, 'Machine'];
+  const ins = await query(
+    'INSERT INTO exercises (user_id, name, muscle_group, equipment) VALUES ($1, $2, $3, $4) RETURNING id',
+    [userId, name, muscle, equipment]
+  );
+  return ins.rows[0].id;
+}
+
+// Seed the default weekly split for any user that doesn't have one yet.
+// Runs for existing users too, creating any missing split exercises by name.
+async function ensureSplitForUser(userId) {
+  const has = await query('SELECT 1 FROM split_days WHERE user_id = $1 LIMIT 1', [userId]);
+  if (has.rows.length) return;
+
+  const ids = {};
+  for (const name of new Set([...UPPER, ...LOWER])) ids[name] = await findOrCreateExercise(userId, name);
+
+  for (let wd = 0; wd <= 6; wd++) {
+    const def = SPLIT_TEMPLATE[wd];
+    const exIds = def.names.map((n) => ids[n]);
     await query(
-      'INSERT INTO exercises (user_id, name, muscle_group, equipment) VALUES ($1, $2, $3, $4)',
-      [userId, name, muscle, equipment]
+      `INSERT INTO split_days (user_id, weekday, title, kind, exercise_ids_json)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userId, wd, def.title, def.kind, JSON.stringify(exIds)]
     );
   }
-  console.log(`[db] seeded user "${username}" with ${STARTER_EXERCISES.length} starter exercises`);
+  console.log(`[db] seeded default weekly split for user ${userId}`);
+}
+
+async function ensureSplits() {
+  const users = await query('SELECT id FROM users');
+  for (const u of users.rows) await ensureSplitForUser(u.id);
 }
 
 export async function initDb() {
@@ -192,4 +256,5 @@ export async function initDb() {
   }
   await runMigrations();
   await seedUser();
+  await ensureSplits();
 }
