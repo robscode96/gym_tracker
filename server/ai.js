@@ -58,13 +58,33 @@ export async function analyzeProgressPhotos(photos, { unit = 'lb' } = {}) {
     : `Here is a progress photo. Give me a baseline physique assessment and what to focus on.`;
   content.push({ type: 'text', text: intro });
 
-  const resp = await client.messages.create({
-    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
-    max_tokens: 1600,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM,
-    messages: [{ role: 'user', content }],
-  });
+  let resp;
+  try {
+    resp = await client.messages.create({
+      model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+      max_tokens: 1600,
+      thinking: { type: 'adaptive' },
+      system: SYSTEM,
+      messages: [{ role: 'user', content }],
+    });
+  } catch (e) {
+    // Translate SDK/HTTP failures into a clear app error. Crucially, never let
+    // an upstream 401/403 propagate as our HTTP status (that signs the user out).
+    const status = e && (e.status || e.statusCode);
+    let msg;
+    if (status === 401 || status === 403) {
+      msg = 'AI analysis failed: your ANTHROPIC_API_KEY was rejected. Double-check the key in your Railway variables.';
+    } else if (status === 429) {
+      msg = 'AI analysis is being rate-limited right now. Please try again shortly.';
+    } else if (status === 404) {
+      msg = 'AI analysis failed: the configured model is not available for this API key.';
+    } else {
+      msg = 'AI analysis failed: ' + ((e && e.message) || 'could not reach the AI service') + '.';
+    }
+    const err = new Error(msg);
+    err.statusCode = 502;
+    throw err;
+  }
 
   if (resp.stop_reason === 'refusal') {
     const err = new Error('The AI declined to analyze these images.');

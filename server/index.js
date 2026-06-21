@@ -58,7 +58,10 @@ app.get('*', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
 // ---- Error handler ----
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  const status = err.statusCode || err.status || 500;
+  // Only honor a status we set intentionally (err.statusCode). Never relay a
+  // third-party library's `.status` (e.g. the Anthropic SDK's 401) — doing so
+  // would make the client think the user's session expired and sign them out.
+  const status = err.statusCode || 500;
   if (status >= 500) console.error('[error]', err);
   res.status(status).json({ error: err.message || 'Something went wrong' });
 });
