@@ -1,0 +1,28 @@
+{
+  "name": "gym-tracker",
+  "version": "1.0.0",
+  "description": "A personal gym tracking PWA — log machines, workouts, sets, reps, weights, streaks, goals and progress photos. Built for Railway + Postgres.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node scripts/smoke-frontend.mjs",
+    "generate-icons": "node scripts/generate-icons.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.12",
+    "jsdom": "^29.1.1"
+  }
+}

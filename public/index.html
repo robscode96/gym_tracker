@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="Personal gym tracker — machines, workouts, streaks, goals and progress." />
+  <title>Gym Tracker</title>
+
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Gym" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <!-- Login -->
+  <section id="login" class="login-screen">
+    <div class="login-card">
+      <div class="brand">
+        <img src="/icons/icon-192.png" alt="" width="72" height="72" />
+        <h1>Gym Tracker</h1>
+        <p class="muted">Sign in to log your lifts</p>
+      </div>
+      <form id="loginForm" autocomplete="on">
+        <label>
+          <span>Username</span>
+          <input type="text" id="username" name="username" autocomplete="username" placeholder="Robert" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input type="password" id="password" name="password" autocomplete="current-password" placeholder="••••••" required />
+        </label>
+        <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Sign in</button>
+        <p class="login-error" id="loginError" hidden></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- App shell -->
+  <div id="main" hidden>
+    <header class="topbar">
+      <h2 id="viewTitle">Home</h2>
+      <button class="icon-btn" id="backBtn" hidden aria-label="Back">‹ Back</button>
+    </header>
+
+    <main id="view" class="view" aria-live="polite"></main>
+
+    <nav class="tabbar" id="tabbar">
+      <button class="tab" data-tab="home" aria-label="Home">
+        <span class="tab-ico">🏠</span><span class="tab-lbl">Home</span>
+      </button>
+      <button class="tab" data-tab="log" aria-label="Log workout">
+        <span class="tab-ico">🏋️</span><span class="tab-lbl">Log</span>
+      </button>
+      <button class="tab" data-tab="progress" aria-label="Progress">
+        <span class="tab-ico">📈</span><span class="tab-lbl">Progress</span>
+      </button>
+      <button class="tab" data-tab="photos" aria-label="Photos">
+        <span class="tab-ico">📸</span><span class="tab-lbl">Photos</span>
+      </button>
+      <button class="tab" data-tab="more" aria-label="More">
+        <span class="tab-ico">⋯</span><span class="tab-lbl">More</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="modal-root"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
