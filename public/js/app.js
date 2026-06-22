@@ -233,7 +233,16 @@ RENDER.home = async function () {
   // Today's plan (from the weekly split)
   if (split && split.length) {
     const day = split.find((d) => d.weekday === new Date().getDay());
-    if (day) wrap.appendChild(todayCard(day));
+    if (day) {
+      // "Done today?" is evaluated in the user's LOCAL date. Workouts are stored
+      // with the local calendar date they were started on (see todayISO()), and we
+      // read from the same /workouts table that feeds the stats counters + streak,
+      // so completion stays consistent. Slicing handles both 'YYYY-MM-DD' (PGlite)
+      // and ISO 'YYYY-MM-DDT…Z' (pg) shapes.
+      const todayStr = todayISO();
+      const todayDone = workouts.some((w) => String(w.performed_on).slice(0, 10) === todayStr);
+      wrap.appendChild(todayCard(day, todayDone));
+    }
   }
 
   // Streak
@@ -309,7 +318,7 @@ function goalLabel(g) {
   }
 }
 
-function todayCard(day) {
+function todayCard(day, todayDone) {
   const card = h('div', { class: 'card today' });
   card.appendChild(h('div', { class: 'kicker' }, `Today · ${dayName(day.weekday)}`));
 
@@ -324,9 +333,17 @@ function todayCard(day) {
   day.exercises.forEach((e) => chips.appendChild(h('span', { class: 'today-chip' }, e.name)));
   card.appendChild(chips);
 
+  const label = day.title || "today's";
   const draftId = localStorage.getItem(DRAFT_KEY);
-  card.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => (draftId ? navigate('log') : startTodayWorkout(day)) },
-    draftId ? '▶︎ Continue workout' : `Start ${day.title || "today's"} workout`));
+  if (draftId) {
+    // Mid-session takes priority over "complete" (an in-progress workout is dated today too).
+    card.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => navigate('log') }, '▶︎ Continue workout'));
+  } else if (todayDone) {
+    card.appendChild(h('div', { class: 'done-banner' }, `✓ ${day.title || 'Today’s'} workout complete`));
+    card.appendChild(h('button', { class: 'linklike', onClick: () => startTodayWorkout(day) }, 'Log another'));
+  } else {
+    card.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => startTodayWorkout(day) }, `Start ${label} workout`));
+  }
   return card;
 }
 

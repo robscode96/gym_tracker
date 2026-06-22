@@ -31,6 +31,8 @@ const HISTORY = {
   pr: { max_weight: 175, best_1rm: 210 },
 };
 const TODAY_WD = new Date().getDay();
+const _now = new Date();
+const TODAY = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
 const SPLIT = [0, 1, 2, 3, 4, 5, 6].map((d) => (d === TODAY_WD
   ? { weekday: d, title: 'Upper', kind: 'workout', exercises: [{ id: 3, name: 'Chest Press' }, { id: 4, name: 'Leg Press' }] }
   : { weekday: d, title: 'Rest', kind: 'rest', exercises: [] }));
@@ -45,7 +47,10 @@ const ROUTES = {
   'GET /api/insights': INSIGHTS,
   'GET /api/stats': STATS,
   'GET /api/goals': [{ id: 1, kind: 'weekly_workouts', target_value: 4, current: 1, pct: 25, reached: false, is_active: true }],
-  'GET /api/workouts': [{ id: 7, title: 'Push day', performed_on: '2026-06-21', exercise_count: 3, set_count: 12, volume: 6150 }],
+  'GET /api/workouts': [
+    { id: 8, title: 'Upper', performed_on: TODAY, exercise_count: 2, set_count: 6, volume: 3000 },
+    { id: 7, title: 'Push day', performed_on: '2026-06-21', exercise_count: 3, set_count: 12, volume: 6150 },
+  ],
   'GET /api/exercises?archived=1': [
     { id: 3, name: 'Chest Press', muscle_group: 'Chest', equipment: 'Machine', is_archived: false, set_count: 12, last_used: '2026-06-21' },
     { id: 4, name: 'Leg Press', muscle_group: 'Legs', equipment: 'Machine', is_archived: false, set_count: 0, last_used: null },
@@ -83,6 +88,8 @@ assert(/week.+streak|streak/.test(view.textContent), 'home shows streak');
 assert(/Push day/.test(view.textContent), 'home shows recent workout');
 assert(window.document.querySelector('.tab.active')?.dataset.tab === 'home', 'home tab active');
 assert(/Today ·/.test(view.textContent) && /Upper/.test(view.textContent), 'home shows Today card');
+assert(view.querySelector('.done-banner') !== null && /workout complete/.test(view.textContent), 'today card shows completed banner when today is logged');
+assert([...view.querySelectorAll('.linklike')].some((e) => /Log another/.test(e.textContent)), 'completed card shows "Log another" link');
 assert(/Total weight lifted/.test(view.textContent), 'beginner-mode volume label applied');
 assert(view.querySelector('.help') !== null, 'help (?) dot rendered');
 
