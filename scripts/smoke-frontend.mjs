@@ -111,6 +111,18 @@ console.log('--- More ---');
 window.document.querySelector('[data-tab="more"]').click();
 await tick(40);
 assert(/Machines & Exercises/.test(view.textContent), 'more menu renders');
+assert([...view.querySelectorAll('.row')].some((r) => /This week/.test(r.textContent)), 'more menu has This week');
+
+console.log('--- Schedule (This Week) ---');
+[...view.querySelectorAll('.row')].find((r) => /This week/.test(r.textContent))?.click();
+await tick(60);
+assert(/Up next/.test(view.textContent), 'schedule shows Up next');
+assert(view.querySelector('.week-day') !== null, 'schedule renders week-day cards');
+assert(/Monday/.test(view.textContent) && /Sunday/.test(view.textContent), 'schedule lists all weekdays');
+assert(view.querySelector('.week-day.today') !== null, 'schedule highlights today');
+
+window.document.querySelector('[data-tab="more"]').click(); // back to the menu
+await tick(40);
 
 console.log('--- Settings (split + beginner) ---');
 [...view.querySelectorAll('.row')].find((r) => /Settings/.test(r.textContent))?.click();

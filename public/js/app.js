@@ -37,10 +37,12 @@ const RENDER = {}; // view name -> async render function
 const TITLES = {
   home: 'Home', log: 'Workout', progress: 'Progress', photos: 'Photos', more: 'More',
   exercises: 'Machines & Exercises', goals: 'Goals', settings: 'Settings', about: 'About', workout: 'Workout',
+  schedule: 'This Week',
 };
 const TAB_OF = {
   home: 'home', log: 'log', progress: 'progress', photos: 'photos', more: 'more',
   exercises: 'more', goals: 'more', settings: 'more', about: 'more', workout: 'log',
+  schedule: 'more',
 };
 
 const unit = () => (user && user.unit) || 'lb';
@@ -320,7 +322,9 @@ function goalLabel(g) {
 
 function todayCard(day, todayDone) {
   const card = h('div', { class: 'card today' });
-  card.appendChild(h('div', { class: 'kicker' }, `Today · ${dayName(day.weekday)}`));
+  card.appendChild(h('div', { class: 'row-between' },
+    h('div', { class: 'kicker' }, `Today · ${dayName(day.weekday)}`),
+    h('button', { class: 'linklike', style: { width: 'auto', margin: '0' }, onClick: () => navigate('schedule') }, 'This week →')));
 
   if (day.kind === 'rest' || !day.exercises.length) {
     card.appendChild(h('div', { class: 'rest-msg' }, '😴 Rest day — recover up.'));
@@ -798,6 +802,7 @@ RENDER.more = async function () {
       h('span', { class: 'badge amber' }, unit().toUpperCase()))));
 
   const menu = h('div', null);
+  menu.appendChild(row({ title: '📅 This week', sub: 'Your weekly schedule & what’s next', onClick: () => navigate('schedule') }));
   menu.appendChild(row({ title: '🏋️ Machines & Exercises', sub: 'Manage the equipment you use', onClick: () => navigate('exercises') }));
   menu.appendChild(row({ title: '🎯 Goals', sub: 'Set and track targets', onClick: () => navigate('goals') }));
   menu.appendChild(row({ title: '⚙️ Settings', sub: 'Units, profile, password', onClick: () => navigate('settings') }));
@@ -807,6 +812,90 @@ RENDER.more = async function () {
   wrap.appendChild(h('button', { class: 'btn btn-danger btn-block', style: { marginTop: '10px' }, onClick: async () => {
     if (await confirmDialog('Sign out of Gym Tracker?', { okText: 'Sign out' })) signOut();
   } }, 'Sign out'));
+  return wrap;
+};
+
+/* ============================ SCHEDULE (This Week) ============================ */
+RENDER.schedule = async function () {
+  const [split, workouts] = await Promise.all([api.get('/split').catch(() => []), api.get('/workouts')]);
+  const wrap = h('div', null);
+  if (!split || !split.length) {
+    wrap.appendChild(empty('📅', 'No weekly schedule yet.', h('button', { class: 'btn btn-primary', onClick: () => navigate('settings') }, 'Set up my split')));
+    return wrap;
+  }
+
+  // All date math is LOCAL (matches how workouts are stored/compared elsewhere).
+  const now = new Date();
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const addDays = (base, n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+  const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const todayStr = todayISO();
+  const doneSet = new Set(workouts.map((w) => String(w.performed_on).slice(0, 10)));
+  const dayFor = (wd) => split.find((d) => d.weekday === wd) || { weekday: wd, kind: 'rest', title: 'Rest', exercises: [] };
+  const isWorkout = (day) => day.kind !== 'rest' && day.exercises.length > 0;
+
+  // ----- Up next: soonest scheduled workout you haven't done -----
+  let upNext = null;
+  for (let off = 0; off < 7; off++) {
+    const date = addDays(today0, off);
+    const day = dayFor(date.getDay());
+    if (!isWorkout(day)) continue;
+    if (off === 0 && doneSet.has(isoLocal(date))) continue; // today already done
+    upNext = { day, date, offset: off };
+    break;
+  }
+
+  const draftId = localStorage.getItem(DRAFT_KEY);
+  const upCard = h('div', { class: 'card today' });
+  upCard.appendChild(h('div', { class: 'kicker' }, 'Up next'));
+  if (!upNext) {
+    upCard.appendChild(h('div', { class: 'rest-msg' }, '🎉 Every scheduled workout this week is done — nice.'));
+  } else {
+    const when = upNext.offset === 0 ? 'Today' : upNext.offset === 1 ? 'Tomorrow' : dayName(upNext.day.weekday);
+    upCard.appendChild(h('h3', { style: { marginTop: '2px' } }, `${when} · ${upNext.day.title || 'Workout'}`));
+    const chips = h('div', { class: 'today-chips' });
+    upNext.day.exercises.forEach((e) => chips.appendChild(h('span', { class: 'today-chip' }, e.name)));
+    upCard.appendChild(chips);
+    if (upNext.offset === 0) {
+      upCard.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => (draftId ? navigate('log') : startTodayWorkout(upNext.day)) },
+        draftId ? '▶︎ Continue workout' : `Start ${upNext.day.title || "today's"} workout`));
+    } else {
+      upCard.appendChild(h('div', { class: 'muted tiny', style: { marginTop: '6px' } }, `Coming up ${dayName(upNext.day.weekday)}, ${fmtDate(isoLocal(upNext.date))}`));
+    }
+  }
+  wrap.appendChild(upCard);
+
+  // ----- The week at a glance (Mon → Sun) -----
+  wrap.appendChild(sectionHead('This week'));
+  const dow = (today0.getDay() + 6) % 7; // Mon=0 .. Sun=6
+  const weekStart = addDays(today0, -dow);
+  for (let off = 0; off < 7; off++) {
+    const date = addDays(weekStart, off);
+    const ds = isoLocal(date);
+    const day = dayFor(date.getDay());
+    const done = doneSet.has(ds);
+    const isToday = ds === todayStr;
+
+    const card = h('div', { class: 'week-day' + (isToday ? ' today' : '') });
+    card.appendChild(h('div', { class: 'row-between' },
+      h('div', null,
+        h('span', { class: 'wd-name' }, dayName(date.getDay())),
+        h('span', { class: 'muted tiny', style: { marginLeft: '8px' } }, fmtDate(ds))),
+      done ? h('span', { class: 'badge green' }, '✓ Done') : (isToday ? h('span', { class: 'badge amber' }, 'Today') : null)));
+
+    if (isWorkout(day)) {
+      card.appendChild(h('div', { class: 'wd-title' }, day.title || 'Workout'));
+      const chips = h('div', { class: 'today-chips' });
+      day.exercises.forEach((e) => chips.appendChild(h('span', { class: 'today-chip' }, e.name)));
+      card.appendChild(chips);
+    } else {
+      const note = day.title && !/^rest$/i.test(day.title) ? `😴 ${day.title}` : '😴 Rest day';
+      card.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, note));
+    }
+    wrap.appendChild(card);
+  }
+
+  wrap.appendChild(h('button', { class: 'btn btn-block', style: { marginTop: '4px' }, onClick: () => navigate('settings') }, '✏️ Edit schedule'));
   return wrap;
 };
 
