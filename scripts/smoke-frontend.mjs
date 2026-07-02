@@ -151,4 +151,23 @@ assert(/Workout templates/.test(view.textContent), 'settings shows Workout templ
 assert(/Pull/.test(view.textContent) && /Legs/.test(view.textContent), 'settings lists Push/Pull/Legs templates');
 assert([...view.querySelectorAll('button')].some((b) => /New template/.test(b.textContent)), 'settings offers New template');
 
+console.log('--- Rest day + manual workout (trained anyway) ---');
+// Reschedule today as a REST day; the workouts mock still has a real workout logged today.
+ROUTES['GET /api/split'] = SPLIT.map((d) => (d.weekday === TODAY_WD
+  ? { weekday: d.weekday, title: 'Rest', kind: 'rest', template_id: null, exercises: [] }
+  : d));
+window.document.querySelector('[data-tab="home"]').click();
+await tick(60);
+assert(/Workout complete/.test(view.textContent), 'rest-day Today card flips to workout-complete after a manual workout');
+assert(/rest day/i.test(view.textContent), 'rest-day context still mentioned');
+assert(![...view.querySelectorAll('button')].some((b) => /Start a workout anyway/.test(b.textContent)), 'no "Start a workout anyway" once today is done');
+assert([...view.querySelectorAll('.linklike')].some((e) => /Log another/.test(e.textContent)), 'rest-done card offers Log another');
+
+window.document.querySelector('[data-tab="more"]').click();
+await tick(40);
+[...view.querySelectorAll('.row')].find((r) => /This week/.test(r.textContent))?.click();
+await tick(60);
+assert(/trained anyway/.test(view.textContent), 'weekly schedule shows trained-anyway on the rest day');
+assert(view.querySelector('.wd-done-link') !== null, 'weekly schedule links to the logged workout');
+
 console.log(process.exitCode ? '\nSMOKE TEST FAILED' : '\nSMOKE TEST PASSED');

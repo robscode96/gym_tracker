@@ -344,3 +344,9 @@ a { color: var(--accent); }
 .wd-name { font-weight: 700; }
 .wd-title { font-size: 14px; color: var(--accent-2); margin-top: 7px; }
 .week-day .today-chips { margin: 9px 0 0; }
+.wd-done-link {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; padding: 7px 0 0;
+  color: var(--accent-2); font-size: 14px; font-weight: 600;
+}
+.wd-done-link:hover { color: var(--text); }

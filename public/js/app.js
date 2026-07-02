@@ -331,10 +331,18 @@ function todayCard(day, todayDone) {
     h('button', { class: 'linklike', style: { width: 'auto', margin: '0' }, onClick: () => navigate('schedule') }, 'This week →')));
 
   if (day.kind === 'rest' || !day.exercises.length) {
-    card.appendChild(h('div', { class: 'rest-msg' }, '😴 Rest day — recover up.'));
-    if (day.title && !/^rest$/i.test(day.title)) card.appendChild(h('div', { class: 'muted tiny' }, day.title));
-    card.appendChild(h('button', { class: 'linklike', onClick: () => (localStorage.getItem(DRAFT_KEY) ? navigate('log') : openStartPicker()) },
-      localStorage.getItem(DRAFT_KEY) ? '▶︎ Continue workout' : 'Start a workout anyway'));
+    const draft = localStorage.getItem(DRAFT_KEY);
+    if (todayDone && !draft) {
+      // Trained on a scheduled rest day — show the completed state, not the plan.
+      card.appendChild(h('div', { class: 'done-banner' }, '✓ Workout complete'));
+      card.appendChild(h('div', { class: 'muted tiny center', style: { marginTop: '8px' } }, 'Bonus work on a scheduled rest day 💪'));
+      card.appendChild(h('button', { class: 'linklike', onClick: () => openStartPicker() }, 'Log another'));
+    } else {
+      card.appendChild(h('div', { class: 'rest-msg' }, '😴 Rest day — recover up.'));
+      if (day.title && !/^rest$/i.test(day.title)) card.appendChild(h('div', { class: 'muted tiny' }, day.title));
+      card.appendChild(h('button', { class: 'linklike', onClick: () => (draft ? navigate('log') : openStartPicker()) },
+        draft ? '▶︎ Continue workout' : 'Start a workout anyway'));
+    }
     return card;
   }
 
@@ -860,7 +868,13 @@ RENDER.schedule = async function () {
   const addDays = (base, n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
   const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const todayStr = todayISO();
-  const doneSet = new Set(workouts.filter((w) => w.set_count > 0).map((w) => String(w.performed_on).slice(0, 10)));
+  const doneByDate = new Map(); // 'YYYY-MM-DD' -> logged workouts that day
+  workouts.filter((w) => w.set_count > 0).forEach((w) => {
+    const ds = String(w.performed_on).slice(0, 10);
+    if (!doneByDate.has(ds)) doneByDate.set(ds, []);
+    doneByDate.get(ds).push(w);
+  });
+  const doneSet = new Set(doneByDate.keys());
   const dayFor = (wd) => split.find((d) => d.weekday === wd) || { weekday: wd, kind: 'rest', title: 'Rest', exercises: [] };
   const isWorkout = (day) => day.kind !== 'rest' && day.exercises.length > 0;
 
@@ -920,8 +934,16 @@ RENDER.schedule = async function () {
       day.exercises.forEach((e) => chips.appendChild(h('span', { class: 'today-chip' }, e.name)));
       card.appendChild(chips);
     } else {
-      const note = day.title && !/^rest$/i.test(day.title) ? `😴 ${day.title}` : '😴 Rest day';
-      card.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, note));
+      const trained = doneByDate.get(ds) || [];
+      if (trained.length) {
+        // A workout was logged on a scheduled rest day — show what actually happened.
+        trained.forEach((w) => card.appendChild(h('button', { class: 'wd-done-link', onClick: () => navigate('workout', { id: w.id }) },
+          `💪 ${w.title || 'Workout'} · ${w.set_count} set${w.set_count === 1 ? '' : 's'} ›`)));
+        card.appendChild(h('div', { class: 'muted tiny', style: { marginTop: '4px' } }, 'Scheduled rest day — you trained anyway'));
+      } else {
+        const note = day.title && !/^rest$/i.test(day.title) ? `😴 ${day.title}` : '😴 Rest day';
+        card.appendChild(h('div', { class: 'muted', style: { marginTop: '6px' } }, note));
+      }
     }
     wrap.appendChild(card);
   }
