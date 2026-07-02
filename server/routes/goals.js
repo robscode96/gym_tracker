@@ -11,14 +11,19 @@ async function currentValue(userId, goal) {
   switch (goal.kind) {
     case 'weekly_workouts': {
       const r = await query(
-        `SELECT COUNT(*) AS n FROM workouts
-         WHERE user_id = $1 AND performed_on >= date_trunc('week', CURRENT_DATE)`,
+        `SELECT COUNT(*) AS n FROM workouts w
+         WHERE w.user_id = $1 AND w.performed_on >= date_trunc('week', CURRENT_DATE)
+           AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w.id)`,
         [userId]
       );
       return num(r.rows[0].n);
     }
     case 'total_workouts': {
-      const r = await query('SELECT COUNT(*) AS n FROM workouts WHERE user_id = $1', [userId]);
+      const r = await query(
+        `SELECT COUNT(*) AS n FROM workouts w WHERE w.user_id = $1
+           AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w.id)`,
+        [userId]
+      );
       return num(r.rows[0].n);
     }
     case 'exercise_weight': {

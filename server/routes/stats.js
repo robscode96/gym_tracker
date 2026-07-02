@@ -44,21 +44,28 @@ function computeStreaks(weekStarts) {
 router.get('/stats', asyncH(async (req, res) => {
   const uid = req.userId;
 
+  // A "workout" everywhere below means a session with at least one logged set —
+  // empty drafts (created the moment "Start" is tapped, sometimes abandoned)
+  // must not inflate counters, the streak, or the calendar.
   const totals = await query(
     `SELECT
-       (SELECT COUNT(*) FROM workouts WHERE user_id = $1) AS workouts,
+       (SELECT COUNT(*) FROM workouts w0 WHERE w0.user_id = $1
+          AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w0.id)) AS workouts,
        (SELECT COUNT(*) FROM sets s JOIN workouts w ON w.id = s.workout_id WHERE w.user_id = $1) AS sets,
        (SELECT COUNT(*) FROM exercises WHERE user_id = $1 AND is_archived = FALSE) AS exercises,
        (SELECT COALESCE(SUM(CASE WHEN s.is_warmup THEN 0 ELSE COALESCE(s.reps,0)*COALESCE(s.weight,0) END),0)
           FROM sets s JOIN workouts w ON w.id = s.workout_id WHERE w.user_id = $1) AS volume,
-       (SELECT COUNT(*) FROM workouts WHERE user_id = $1 AND performed_on >= date_trunc('week', CURRENT_DATE)) AS this_week,
-       (SELECT MAX(performed_on) FROM workouts WHERE user_id = $1) AS last_workout`,
+       (SELECT COUNT(*) FROM workouts w1 WHERE w1.user_id = $1 AND w1.performed_on >= date_trunc('week', CURRENT_DATE)
+          AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w1.id)) AS this_week,
+       (SELECT MAX(w2.performed_on) FROM workouts w2 WHERE w2.user_id = $1
+          AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w2.id)) AS last_workout`,
     [uid]
   );
   const t = totals.rows[0];
 
   const weeks = await query(
-    `SELECT DISTINCT date_trunc('week', performed_on)::date AS wk FROM workouts WHERE user_id = $1`,
+    `SELECT DISTINCT date_trunc('week', w.performed_on)::date AS wk FROM workouts w
+     WHERE w.user_id = $1 AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w.id)`,
     [uid]
   );
   const streak = computeStreaks(weeks.rows.map((r) => r.wk));
@@ -84,7 +91,7 @@ router.get('/stats', asyncH(async (req, res) => {
   const volRes = await query(
     `SELECT date_trunc('week', w.performed_on)::date AS wk,
             SUM(CASE WHEN s.is_warmup THEN 0 ELSE COALESCE(s.reps,0)*COALESCE(s.weight,0) END) AS volume
-     FROM workouts w LEFT JOIN sets s ON s.workout_id = w.id
+     FROM workouts w JOIN sets s ON s.workout_id = w.id
      WHERE w.user_id = $1 AND w.performed_on >= CURRENT_DATE - INTERVAL '84 days'
      GROUP BY wk ORDER BY wk ASC`,
     [uid]
@@ -92,9 +99,10 @@ router.get('/stats', asyncH(async (req, res) => {
   const volume_by_week = volRes.rows.map((r) => ({ week: r.wk, volume: num(r.volume) }));
 
   const calRes = await query(
-    `SELECT DISTINCT performed_on FROM workouts
-     WHERE user_id = $1 AND performed_on >= CURRENT_DATE - INTERVAL '140 days'
-     ORDER BY performed_on`,
+    `SELECT DISTINCT w.performed_on FROM workouts w
+     WHERE w.user_id = $1 AND w.performed_on >= CURRENT_DATE - INTERVAL '140 days'
+       AND EXISTS (SELECT 1 FROM sets sx WHERE sx.workout_id = w.id)
+     ORDER BY w.performed_on`,
     [uid]
   );
 

@@ -34,8 +34,13 @@ const TODAY_WD = new Date().getDay();
 const _now = new Date();
 const TODAY = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
 const SPLIT = [0, 1, 2, 3, 4, 5, 6].map((d) => (d === TODAY_WD
-  ? { weekday: d, title: 'Upper', kind: 'workout', exercises: [{ id: 3, name: 'Chest Press' }, { id: 4, name: 'Leg Press' }] }
-  : { weekday: d, title: 'Rest', kind: 'rest', exercises: [] }));
+  ? { weekday: d, title: 'Push', kind: 'workout', template_id: 1, exercises: [{ id: 3, name: 'Chest Press' }, { id: 4, name: 'Leg Press' }] }
+  : { weekday: d, title: 'Rest', kind: 'rest', template_id: null, exercises: [] }));
+const TEMPLATES = [
+  { id: 1, name: 'Push', exercises: [{ id: 3, name: 'Chest Press' }], used_on: [TODAY_WD] },
+  { id: 2, name: 'Pull', exercises: [{ id: 5, name: 'Lat Pulldown' }], used_on: [] },
+  { id: 3, name: 'Legs', exercises: [{ id: 4, name: 'Leg Press' }], used_on: [] },
+];
 const INSIGHTS = {
   week: { this: 2, last: 1 },
   exercises: [{ id: 3, name: 'Chest Press', sessions: 2, first_top: 100, last_top: 115, delta: 15, last_date: '2026-06-21' }],
@@ -44,11 +49,13 @@ const ROUTES = {
   'GET /api/me': { user: { id: 1, username: 'Robert', display_name: 'Robert', unit: 'lb', beginner_mode: true } },
   'GET /api/ai/status': { enabled: false },
   'GET /api/split': SPLIT,
+  'GET /api/templates': TEMPLATES,
   'GET /api/insights': INSIGHTS,
   'GET /api/stats': STATS,
   'GET /api/goals': [{ id: 1, kind: 'weekly_workouts', target_value: 4, current: 1, pct: 25, reached: false, is_active: true }],
   'GET /api/workouts': [
-    { id: 8, title: 'Upper', performed_on: TODAY, exercise_count: 2, set_count: 6, volume: 3000 },
+    { id: 9, title: null, performed_on: TODAY, exercise_count: 0, set_count: 0, volume: 0 }, // abandoned empty draft
+    { id: 8, title: 'Push', performed_on: TODAY, exercise_count: 2, set_count: 6, volume: 3000 },
     { id: 7, title: 'Push day', performed_on: '2026-06-21', exercise_count: 3, set_count: 12, volume: 6150 },
   ],
   'GET /api/exercises?archived=1': [
@@ -87,11 +94,21 @@ assert(/Total workouts/.test(view.textContent), 'home shows stat tiles');
 assert(/week.+streak|streak/.test(view.textContent), 'home shows streak');
 assert(/Push day/.test(view.textContent), 'home shows recent workout');
 assert(window.document.querySelector('.tab.active')?.dataset.tab === 'home', 'home tab active');
-assert(/Today ·/.test(view.textContent) && /Upper/.test(view.textContent), 'home shows Today card');
+assert(/Today ·/.test(view.textContent) && /Push/.test(view.textContent), 'home shows Today card');
 assert(view.querySelector('.done-banner') !== null && /workout complete/.test(view.textContent), 'today card shows completed banner when today is logged');
 assert([...view.querySelectorAll('.linklike')].some((e) => /Log another/.test(e.textContent)), 'completed card shows "Log another" link');
 assert(/Total weight lifted/.test(view.textContent), 'beginner-mode volume label applied');
 assert(view.querySelector('.help') !== null, 'help (?) dot rendered');
+assert(!/0 sets/.test(view.textContent), 'empty abandoned drafts are hidden from Recent workouts');
+
+console.log('--- Start picker (templates) ---');
+[...view.querySelectorAll('button')].find((b) => /＋ Start a workout/.test(b.textContent))?.click();
+await tick(60);
+const modal = window.document.getElementById('modal-root');
+assert(/Push/.test(modal.textContent) && /Pull/.test(modal.textContent) && /Legs/.test(modal.textContent), 'start picker lists templates');
+assert(/Blank workout/.test(modal.textContent), 'start picker offers a blank workout');
+modal.querySelector('.sheet-backdrop')?.click(); // close
+await tick(30);
 
 console.log('--- Progress (charts) ---');
 window.document.querySelector('[data-tab="progress"]').click();
@@ -130,5 +147,8 @@ await tick(60);
 assert(/Beginner mode/.test(view.textContent), 'settings shows beginner-mode toggle');
 assert(/My split/.test(view.textContent), 'settings shows My split');
 assert(/Monday/.test(view.textContent), 'settings split lists weekdays');
+assert(/Workout templates/.test(view.textContent), 'settings shows Workout templates section');
+assert(/Pull/.test(view.textContent) && /Legs/.test(view.textContent), 'settings lists Push/Pull/Legs templates');
+assert([...view.querySelectorAll('button')].some((b) => /New template/.test(b.textContent)), 'settings offers New template');
 
 console.log(process.exitCode ? '\nSMOKE TEST FAILED' : '\nSMOKE TEST PASSED');

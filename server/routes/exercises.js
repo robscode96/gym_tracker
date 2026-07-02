@@ -93,9 +93,12 @@ router.get('/exercises/:id/history', asyncH(async (req, res) => {
   res.json({ exercise: owner.rows[0], series, pr: { max_weight: maxWeight, best_1rm: best1rm } });
 }));
 
-// "Try next time" suggestion for the set logger, using simple double progression
-// over an 8–12 rep range. Pin-loaded machines: if the next weight jump is large
-// (>12% of the working weight), suggest adding a rep instead of adding weight.
+// "Try next time" suggestion for the set logger. Double progression over a
+// 10–15 rep range, anchored on the BEST set of the last session — the set with
+// the highest Epley estimated 1RM (weight * (1 + reps/30)) — never the lowest
+// (often fatigued) set. Under 15 reps: same weight, one more rep. At 15+:
+// next weight increment up (smallest increment seen on this machine, default
+// +5 lb / 2.5 kg), reps reset to 10.
 router.get('/exercises/:id/suggestion', asyncH(async (req, res) => {
   const id = toInt(req.params.id);
   const exclude = toInt(req.query.exclude); // ignore the in-progress workout
@@ -122,12 +125,20 @@ router.get('/exercises/:id/suggestion', asyncH(async (req, res) => {
     .filter((s) => s.weight != null);
   if (!sets.length) return res.json({ has: false });
 
-  const TOP = 12, BOTTOM = 8;
-  const topWeight = Math.max(...sets.map((s) => s.weight));
-  const minRepsAtTop = Math.min(...sets.filter((s) => s.weight === topWeight).map((s) => s.reps));
-  const completedAllAtTop = sets.every((s) => s.reps >= TOP);
+  const REP_TOP = 15, REP_BOTTOM = 10;
 
-  // Infer this machine's weight step from the smallest gap between weights used.
+  // Best set of the session = highest Epley e1RM (ties: heavier, then more reps).
+  const e1rm = (s) => s.weight * (1 + s.reps / 30);
+  let best = sets[0];
+  for (const s of sets) {
+    if (e1rm(s) > e1rm(best) ||
+        (e1rm(s) === e1rm(best) && (s.weight > best.weight || (s.weight === best.weight && s.reps > best.reps)))) {
+      best = s;
+    }
+  }
+
+  // Smallest real increment this machine allows, inferred from the smallest gap
+  // between weights ever used on it; default +5 lb (2.5 kg) when unknown.
   const wRes = await query(
     `SELECT DISTINCT weight FROM sets s JOIN workouts w ON w.id = s.workout_id
      WHERE w.user_id = $1 AND s.exercise_id = $2 AND NOT s.is_warmup AND weight IS NOT NULL
@@ -140,25 +151,28 @@ router.get('/exercises/:id/suggestion', asyncH(async (req, res) => {
     const d = weights[k] - weights[k - 1];
     if (d > 0 && (step == null || d < step)) step = d;
   }
-  const userRow = await query('SELECT unit FROM users WHERE id = $1', [req.userId]);
-  if (step == null) step = (userRow.rows[0]?.unit === 'kg') ? 5 : 10;
+  if (step == null) {
+    const userRow = await query('SELECT unit FROM users WHERE id = $1', [req.userId]);
+    step = userRow.rows[0]?.unit === 'kg' ? 2.5 : 5;
+  }
 
   let suggestion, addedWeight = false;
-  if (completedAllAtTop) {
-    const bigJump = step > 0.12 * topWeight;
-    if (bigJump) {
-      suggestion = { reps: TOP + 1, weight: topWeight }; // add a rep rather than a big pin jump
-    } else {
-      suggestion = { reps: BOTTOM, weight: topWeight + step };
-      addedWeight = true;
-    }
+  if (best.reps >= REP_TOP) {
+    suggestion = { reps: REP_BOTTOM, weight: Math.round((best.weight + step) * 100) / 100 };
+    addedWeight = true;
   } else {
-    suggestion = { reps: minRepsAtTop + 1, weight: topWeight };
+    suggestion = { reps: best.reps + 1, weight: best.weight };
   }
 
   res.json({
     has: true,
-    last: { reps: minRepsAtTop, weight: topWeight, sets: sets.length, date: last.rows[0].performed_on },
+    last: {
+      reps: best.reps,
+      weight: best.weight,
+      e1rm: Math.round(e1rm(best) * 10) / 10,
+      sets: sets.length,
+      date: last.rows[0].performed_on,
+    },
     suggestion,
     added_weight: addedWeight,
   });

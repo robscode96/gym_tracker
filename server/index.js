@@ -14,6 +14,7 @@ import statsRouter from './routes/stats.js';
 import photosRouter from './routes/photos.js';
 import accountRouter from './routes/account.js';
 import splitRouter from './routes/split.js';
+import templatesRouter from './routes/templates.js';
 import insightsRouter from './routes/insights.js';
 import { serviceWorker } from './service-worker.js';
 
@@ -44,7 +45,7 @@ app.post('/api/login', asyncH(async (req, res) => {
 }));
 
 // ---- Protected API ----
-app.use('/api', authMiddleware, exercisesRouter, workoutsRouter, goalsRouter, statsRouter, photosRouter, accountRouter, splitRouter, insightsRouter);
+app.use('/api', authMiddleware, exercisesRouter, workoutsRouter, goalsRouter, statsRouter, photosRouter, accountRouter, splitRouter, templatesRouter, insightsRouter);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // ---- PWA service worker (served from root scope, versioned per build) ----

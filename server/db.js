@@ -142,6 +142,15 @@ CREATE INDEX IF NOT EXISTS idx_photos_user    ON photos(user_id, taken_on);
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS beginner_mode BOOLEAN NOT NULL DEFAULT TRUE;
 
+CREATE TABLE IF NOT EXISTS workout_templates (
+  id                SERIAL PRIMARY KEY,
+  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  exercise_ids_json TEXT NOT NULL DEFAULT '[]',
+  position          INTEGER NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS split_days (
   id                SERIAL PRIMARY KEY,
   user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -149,18 +158,24 @@ CREATE TABLE IF NOT EXISTS split_days (
   title             TEXT,
   kind              TEXT NOT NULL DEFAULT 'workout',
   exercise_ids_json TEXT NOT NULL DEFAULT '[]',
+  template_id       INTEGER REFERENCES workout_templates(id) ON DELETE SET NULL,
   UNIQUE (user_id, weekday)
 );
+
+ALTER TABLE split_days ADD COLUMN IF NOT EXISTS template_id INTEGER REFERENCES workout_templates(id) ON DELETE SET NULL;
 `;
 
-// Default weekly split (pin-loaded machine movements).
-const UPPER = ['Chest Press', 'Seated Row', 'Shoulder Press', 'Lat Pulldown', 'Bicep Curl', 'Tricep Pushdown'];
+// Default workout templates (all pin-loaded machine movements).
+const PUSH = ['Chest Press', 'Pectoral Fly', 'Shoulder Press', 'Tricep Pushdown'];
+const PULL = ['Lat Pulldown', 'Seated Row', 'Rear Deltoid', 'Bicep Curl'];
 const LOWER = ['Leg Press', 'Leg Extension', 'Seated Leg Curl', 'Calf Raise', 'Hip Abduction'];
 
 const EXERCISE_META = {
   'Chest Press': ['Chest', 'Machine'],
+  'Pectoral Fly': ['Chest', 'Machine'],
   'Seated Row': ['Back', 'Machine'],
   'Shoulder Press': ['Shoulders', 'Machine'],
+  'Rear Deltoid': ['Shoulders', 'Machine'],
   'Lat Pulldown': ['Back', 'Machine'],
   'Bicep Curl': ['Arms', 'Machine'],
   'Tricep Pushdown': ['Arms', 'Machine'],
@@ -171,16 +186,20 @@ const EXERCISE_META = {
   'Hip Abduction': ['Glutes', 'Machine'],
 };
 
-// Keyed by JS getDay() — 0=Sun .. 6=Sat.
-const SPLIT_TEMPLATE = {
-  0: { title: 'Lower', kind: 'workout', names: LOWER },
-  1: { title: 'Upper', kind: 'workout', names: UPPER },
-  2: { title: 'Rest (delivery route day)', kind: 'rest', names: [] },
-  3: { title: 'Lower', kind: 'workout', names: LOWER },
-  4: { title: 'Rest', kind: 'rest', names: [] },
-  5: { title: 'Upper', kind: 'workout', names: UPPER },
-  6: { title: 'Rest (delivery route day)', kind: 'rest', names: [] },
+// Default weekday -> template assignment for brand-new users (0=Sun .. 6=Sat).
+// The schedule itself is user-editable; this is only the starting point.
+const DEFAULT_WEEK = {
+  1: { template: 'Push' },
+  2: { rest: 'Rest (delivery route day)' },
+  3: { template: 'Legs' },
+  4: { rest: 'Rest' },
+  5: { template: 'Pull' },
+  6: { rest: 'Rest (delivery route day)' },
+  0: { template: 'Legs' },
 };
+
+const MON_FIRST = [1, 2, 3, 4, 5, 6, 0];
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 async function runMigrations() {
   // PGlite executes one statement per call; split on ';' for portability.
@@ -219,30 +238,101 @@ async function findOrCreateExercise(userId, name) {
   return ins.rows[0].id;
 }
 
-// Seed the default weekly split for any user that doesn't have one yet.
-// Runs for existing users too, creating any missing split exercises by name.
-async function ensureSplitForUser(userId) {
-  const has = await query('SELECT 1 FROM split_days WHERE user_id = $1 LIMIT 1', [userId]);
-  if (has.rows.length) return;
+async function createTemplate(userId, name, exerciseIds, position) {
+  const { rows } = await query(
+    'INSERT INTO workout_templates (user_id, name, exercise_ids_json, position) VALUES ($1, $2, $3, $4) RETURNING id',
+    [userId, name, JSON.stringify(exerciseIds), position]
+  );
+  return rows[0].id;
+}
 
-  const ids = {};
-  for (const name of new Set([...UPPER, ...LOWER])) ids[name] = await findOrCreateExercise(userId, name);
+async function idsFor(userId, names) {
+  const out = [];
+  for (const n of names) out.push(await findOrCreateExercise(userId, n));
+  return out;
+}
 
-  for (let wd = 0; wd <= 6; wd++) {
-    const def = SPLIT_TEMPLATE[wd];
-    const exIds = def.names.map((n) => ids[n]);
+const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+// Seed Push/Pull/Legs templates and the weekly assignment. Idempotent: skipped
+// once the user has any template. Existing users (pre-template split_days rows
+// with embedded exercise lists) are migrated in place:
+//   - "Push"/"Pull"/"Lower|Leg"-titled days donate their (possibly user-edited)
+//     exercise lists to the matching template; otherwise the new defaults apply.
+//   - "Upper" days are replaced by Push and Pull (Mon-first order), per the new
+//     default templates.
+//   - Any other custom workout day keeps its exercises via a bespoke template.
+async function ensureTemplatesForUser(userId) {
+  const existing = await query('SELECT id FROM workout_templates WHERE user_id = $1 LIMIT 1', [userId]);
+  if (existing.rows.length) return;
+
+  const daysRes = await query('SELECT * FROM split_days WHERE user_id = $1', [userId]);
+  const days = MON_FIRST
+    .map((wd) => daysRes.rows.find((d) => d.weekday === wd))
+    .filter(Boolean)
+    .map((d) => {
+      let ids = [];
+      try { ids = JSON.parse(d.exercise_ids_json || '[]'); } catch { ids = []; }
+      return { ...d, ids, isWorkout: d.kind === 'workout' && ids.length > 0 };
+    });
+
+  const listFrom = (re) => {
+    const m = days.find((d) => d.isWorkout && re.test(d.title || ''));
+    return m ? m.ids : null;
+  };
+  const pushIds = listFrom(/push/i) || (await idsFor(userId, PUSH));
+  const pullIds = listFrom(/pull/i) || (await idsFor(userId, PULL));
+  const legsIds = listFrom(/lower|leg/i) || (await idsFor(userId, LOWER));
+
+  const pushId = await createTemplate(userId, 'Push', pushIds, 0);
+  const pullId = await createTemplate(userId, 'Pull', pullIds, 1);
+  const legsId = await createTemplate(userId, 'Legs', legsIds, 2);
+
+  if (!days.length) {
+    for (const wd of MON_FIRST) {
+      const def = DEFAULT_WEEK[wd];
+      const templateId = def.template ? { Push: pushId, Pull: pullId, Legs: legsId }[def.template] : null;
+      await query(
+        `INSERT INTO split_days (user_id, weekday, title, kind, exercise_ids_json, template_id)
+         VALUES ($1, $2, $3, $4, '[]', $5)`,
+        [userId, wd, templateId ? null : def.rest, templateId ? 'workout' : 'rest', templateId]
+      );
+    }
+    console.log(`[db] seeded Push/Pull/Legs templates and default week for user ${userId}`);
+    return;
+  }
+
+  let upperFlip = 0;
+  let bespokePos = 3;
+  for (const d of days) {
+    let templateId = null;
+    if (d.isWorkout) {
+      const t = d.title || '';
+      if (/push/i.test(t)) templateId = pushId;
+      else if (/pull/i.test(t)) templateId = pullId;
+      else if (/lower|leg/i.test(t)) {
+        templateId = sameList(d.ids, legsIds)
+          ? legsId
+          : await createTemplate(userId, `${t} (${WEEKDAY_NAMES[d.weekday]})`, d.ids, bespokePos++);
+      } else if (/upper/i.test(t)) {
+        templateId = upperFlip++ % 2 === 0 ? pushId : pullId;
+      } else {
+        templateId = await createTemplate(userId, t || `${WEEKDAY_NAMES[d.weekday]} workout`, d.ids, bespokePos++);
+      }
+    }
+    // Workout days take their display name from the template; rest days keep
+    // their stored title (e.g. "Rest (delivery route day)").
     await query(
-      `INSERT INTO split_days (user_id, weekday, title, kind, exercise_ids_json)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [userId, wd, def.title, def.kind, JSON.stringify(exIds)]
+      'UPDATE split_days SET template_id = $1, kind = $2, title = $3 WHERE user_id = $4 AND weekday = $5',
+      [templateId, templateId ? 'workout' : 'rest', templateId ? null : (d.title || 'Rest'), userId, d.weekday]
     );
   }
-  console.log(`[db] seeded default weekly split for user ${userId}`);
+  console.log(`[db] migrated weekly split to Push/Pull/Legs templates for user ${userId}`);
 }
 
 async function ensureSplits() {
   const users = await query('SELECT id FROM users');
-  for (const u of users.rows) await ensureSplitForUser(u.id);
+  for (const u of users.rows) await ensureTemplatesForUser(u.id);
 }
 
 export async function initDb() {

@@ -323,6 +323,18 @@ a { color: var(--accent); }
 }
 .linklike:hover { color: var(--text); }
 
+/* ---------- Template editor (ordered exercise list) ---------- */
+.order-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 11px; margin-bottom: 7px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
+}
+.order-item .nm { flex: 1; font-size: 14.5px; }
+.order-item button { background: none; border: none; color: var(--muted); font-size: 16px; padding: 4px 7px; }
+.order-item button:disabled { opacity: .3; }
+.order-item button:not(:disabled):hover { color: var(--text); }
+.order-item .rm { color: var(--red); }
+
 /* ---------- Weekly schedule ---------- */
 .week-day {
   background: var(--surface); border: 1px solid var(--border);

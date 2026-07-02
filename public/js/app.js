@@ -240,9 +240,10 @@ RENDER.home = async function () {
       // with the local calendar date they were started on (see todayISO()), and we
       // read from the same /workouts table that feeds the stats counters + streak,
       // so completion stays consistent. Slicing handles both 'YYYY-MM-DD' (PGlite)
-      // and ISO 'YYYY-MM-DDT…Z' (pg) shapes.
+      // and ISO 'YYYY-MM-DDT…Z' (pg) shapes. Only workouts with logged sets count
+      // (an abandoned empty draft isn't a completed workout).
       const todayStr = todayISO();
-      const todayDone = workouts.some((w) => String(w.performed_on).slice(0, 10) === todayStr);
+      const todayDone = workouts.some((w) => w.set_count > 0 && String(w.performed_on).slice(0, 10) === todayStr);
       wrap.appendChild(todayCard(day, todayDone));
     }
   }
@@ -265,10 +266,10 @@ RENDER.home = async function () {
     statTile(t.exercises, 'Machines'),
   ));
 
-  // Quick start
+  // Quick start (picks a template — Push / Pull / Legs — or blank)
   const draftId = localStorage.getItem(DRAFT_KEY);
   wrap.appendChild(h('div', { style: { margin: '14px 0' } },
-    h('button', { class: 'btn btn-primary btn-block', onClick: () => (draftId ? navigate('log') : startWorkout()) },
+    h('button', { class: 'btn btn-primary btn-block', onClick: () => (draftId ? navigate('log') : openStartPicker()) },
       draftId ? '▶︎ Continue workout' : '＋ Start a workout')));
 
   // Active goals (top 3)
@@ -280,13 +281,16 @@ RENDER.home = async function () {
     wrap.appendChild(c);
   }
 
-  // Recent workouts
+  // Recent workouts — only sessions with logged sets (empty abandoned drafts
+  // would otherwise crowd real workouts out of this window); the active draft
+  // stays visible so it can be resumed.
+  const recent = workouts.filter((w) => w.set_count > 0 || String(w.id) === draftId);
   wrap.appendChild(sectionHead('Recent workouts', workouts.length ? 'History' : null, workouts.length ? () => navigate('log') : null));
-  if (!workouts.length) {
-    wrap.appendChild(empty('🏋️', 'No workouts logged yet.', h('button', { class: 'btn btn-primary', onClick: () => startWorkout() }, 'Log your first workout')));
+  if (!recent.length) {
+    wrap.appendChild(empty('🏋️', 'No workouts logged yet.', h('button', { class: 'btn btn-primary', onClick: () => openStartPicker() }, 'Log your first workout')));
   } else {
     const list = h('div', null);
-    workouts.slice(0, 5).forEach((w) => list.appendChild(workoutRow(w)));
+    recent.slice(0, 5).forEach((w) => list.appendChild(workoutRow(w)));
     wrap.appendChild(list);
   }
   return wrap;
@@ -329,6 +333,8 @@ function todayCard(day, todayDone) {
   if (day.kind === 'rest' || !day.exercises.length) {
     card.appendChild(h('div', { class: 'rest-msg' }, '😴 Rest day — recover up.'));
     if (day.title && !/^rest$/i.test(day.title)) card.appendChild(h('div', { class: 'muted tiny' }, day.title));
+    card.appendChild(h('button', { class: 'linklike', onClick: () => (localStorage.getItem(DRAFT_KEY) ? navigate('log') : openStartPicker()) },
+      localStorage.getItem(DRAFT_KEY) ? '▶︎ Continue workout' : 'Start a workout anyway'));
     return card;
   }
 
@@ -344,20 +350,43 @@ function todayCard(day, todayDone) {
     card.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => navigate('log') }, '▶︎ Continue workout'));
   } else if (todayDone) {
     card.appendChild(h('div', { class: 'done-banner' }, `✓ ${day.title || 'Today’s'} workout complete`));
-    card.appendChild(h('button', { class: 'linklike', onClick: () => startTodayWorkout(day) }, 'Log another'));
+    card.appendChild(h('button', { class: 'linklike', onClick: () => openStartPicker() }, 'Log another'));
   } else {
     card.appendChild(h('button', { class: 'btn btn-primary btn-block', onClick: () => startTodayWorkout(day) }, `Start ${label} workout`));
   }
   return card;
 }
 
-async function startTodayWorkout(day) {
+// Start a workout pre-populated from a template (or a scheduled day, which
+// carries the same {name/title, exercises} shape). Every start path goes
+// through here or startWorkout so the created rows are structurally identical.
+async function startWorkoutFromTemplate(tpl) {
   try {
-    const w = await api.post('/workouts', { performed_on: todayISO(), title: day.title || null });
+    const w = await api.post('/workouts', { performed_on: todayISO(), title: tpl.name || tpl.title || null });
     localStorage.setItem(DRAFT_KEY, String(w.id));
-    session = { workoutId: w.id, exerciseIds: day.exercises.map((e) => e.id) };
+    session = { workoutId: w.id, exerciseIds: (tpl.exercises || []).map((e) => e.id) };
     navigate('log');
   } catch (err) { toast(err.message, 'err'); }
+}
+
+function startTodayWorkout(day) {
+  return startWorkoutFromTemplate(day);
+}
+
+// Pick a saved template (Push / Pull / Legs / custom) — or a blank workout —
+// and start it today, regardless of what the schedule says.
+async function openStartPicker() {
+  if (localStorage.getItem(DRAFT_KEY)) { navigate('log'); return; }
+  let templates = [];
+  try { templates = await api.get('/templates'); } catch { templates = []; }
+  const body = h('div', { class: 'stack' });
+  templates.forEach((t) => body.appendChild(h('button', { class: 'row', style: { margin: '0' }, onClick: () => { s.close(); startWorkoutFromTemplate(t); } },
+    h('div', { class: 'row-main' },
+      h('div', { class: 'row-title' }, t.name),
+      h('div', { class: 'row-sub' }, t.exercises.map((e) => e.name).join(', ') || 'No exercises yet')),
+    h('div', { class: 'chev' }, '›'))));
+  body.appendChild(h('button', { class: 'btn btn-block', onClick: () => { s.close(); startWorkout(); } }, 'Blank workout'));
+  const s = sheet({ title: 'Start a workout', body });
 }
 
 /* ============================ LOG / WORKOUT LOGGER ============================ */
@@ -390,7 +419,8 @@ RENDER.log = async function () {
     if (!byEx.has(s.exercise_id)) byEx.set(s.exercise_id, []);
     byEx.get(s.exercise_id).push(s);
   });
-  const exIds = [...new Set([...byEx.keys(), ...session.exerciseIds])];
+  // Session (template) order first so exercises stay in the order you planned.
+  const exIds = [...new Set([...session.exerciseIds, ...byEx.keys()])];
 
   // "Try next time" suggestions (based on the previous session, not this draft).
   const suggestions = {};
@@ -432,11 +462,11 @@ function exerciseBlock(workoutId, ex, sets, suggestion) {
     h('span', null, ex ? ex.name : 'Exercise'),
     ex && ex.equipment ? h('span', { class: 'badge' }, ex.equipment) : null));
 
-  // Gentle "try next time" hint from the previous session.
+  // Gentle "try next time" hint, anchored on the BEST set of the last session.
   if (suggestion && suggestion.has) {
     const L = suggestion.last, S = suggestion.suggestion;
     block.appendChild(h('div', { class: 'hint' },
-      `Last time: ${fmtNum(L.weight)} ${unit()} × ${L.reps} — try ${fmtNum(S.weight)} ${unit()} × ${S.reps}`));
+      `Last best set: ${fmtNum(L.weight)} ${unit()} × ${L.reps} — try ${fmtNum(S.weight)} ${unit()} × ${S.reps}`));
   }
 
   sets.forEach((s, i) => {
@@ -531,7 +561,7 @@ async function logHome() {
   const wrap = h('div', null);
   wrap.appendChild(h('div', { class: 'card' },
     h('div', { class: 'card-title' }, 'New session'),
-    h('button', { class: 'btn btn-primary btn-block', onClick: () => startWorkout() }, '＋ Start a workout')));
+    h('button', { class: 'btn btn-primary btn-block', onClick: () => openStartPicker() }, '＋ Start a workout')));
 
   wrap.appendChild(sectionHead('History'));
   if (!workouts.length) {
@@ -830,7 +860,7 @@ RENDER.schedule = async function () {
   const addDays = (base, n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
   const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const todayStr = todayISO();
-  const doneSet = new Set(workouts.map((w) => String(w.performed_on).slice(0, 10)));
+  const doneSet = new Set(workouts.filter((w) => w.set_count > 0).map((w) => String(w.performed_on).slice(0, 10)));
   const dayFor = (wd) => split.find((d) => d.weekday === wd) || { weekday: wd, kind: 'rest', title: 'Rest', exercises: [] };
   const isWorkout = (day) => day.kind !== 'rest' && day.exercises.length > 0;
 
@@ -850,6 +880,7 @@ RENDER.schedule = async function () {
   upCard.appendChild(h('div', { class: 'kicker' }, 'Up next'));
   if (!upNext) {
     upCard.appendChild(h('div', { class: 'rest-msg' }, '🎉 Every scheduled workout this week is done — nice.'));
+    upCard.appendChild(h('button', { class: 'linklike', onClick: () => openStartPicker() }, 'Start an extra workout'));
   } else {
     const when = upNext.offset === 0 ? 'Today' : upNext.offset === 1 ? 'Tomorrow' : dayName(upNext.day.weekday);
     upCard.appendChild(h('h3', { style: { marginTop: '2px' } }, `${when} · ${upNext.day.title || 'Workout'}`));
@@ -1034,7 +1065,10 @@ function openGoalActions(g) {
 /* ============================ SETTINGS ============================ */
 RENDER.settings = async function () {
   const wrap = h('div', null);
-  const split = await api.get('/split').catch(() => []);
+  const [split, templates] = await Promise.all([
+    api.get('/split').catch(() => []),
+    api.get('/templates').catch(() => []),
+  ]);
 
   // Display name
   const dn = h('input', { value: user.display_name || '', placeholder: 'Display name' });
@@ -1053,19 +1087,36 @@ RENDER.settings = async function () {
     h('div', { class: 'muted tiny', style: { marginBottom: '10px' } }, 'Plain-language labels with quick (?) explanations. Turn off to show technical terms.'),
     h('div', { class: 'pill-grp' }, bm(true), bm(false))));
 
-  // My split
+  // My split — assign a template (Push / Pull / Legs / …) or rest to each day
   const splitCard = h('div', { class: 'card' });
   splitCard.appendChild(h('div', { class: 'card-title' }, 'My split'));
+  splitCard.appendChild(h('div', { class: 'muted tiny', style: { marginBottom: '10px' } }, 'Tap a day to assign a workout template or make it a rest day.'));
   [1, 2, 3, 4, 5, 6, 0].forEach((wd) => {
-    const day = split.find((d) => d.weekday === wd) || { weekday: wd, kind: 'rest', title: 'Rest', exercises: [] };
+    const day = split.find((d) => d.weekday === wd) || { weekday: wd, kind: 'rest', title: 'Rest', template_id: null, exercises: [] };
     const isRest = day.kind === 'rest' || !day.exercises.length;
     splitCard.appendChild(row({
-      title: `${dayName(wd)}${day.title ? ' · ' + day.title : ''}`,
-      sub: isRest ? 'Rest day' : day.exercises.map((e) => e.name).join(', '),
-      onClick: () => openSplitEditor(day),
+      title: `${dayName(wd)} · ${isRest ? 'Rest' : day.title}`,
+      sub: isRest
+        ? (day.title && !/^rest$/i.test(day.title) ? day.title : 'Rest day')
+        : day.exercises.map((e) => e.name).join(', '),
+      onClick: () => openDayAssignSheet(day, templates),
     }));
   });
   wrap.appendChild(splitCard);
+
+  // Workout templates — edit the reusable exercise lists themselves
+  const tplCard = h('div', { class: 'card' });
+  tplCard.appendChild(h('div', { class: 'card-title' }, 'Workout templates'));
+  templates.forEach((t) => tplCard.appendChild(row({
+    title: t.name,
+    sub: t.exercises.map((e) => e.name).join(', ') || 'No exercises yet',
+    meta: t.used_on && t.used_on.length
+      ? t.used_on.slice().sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((wd) => dayName(wd).slice(0, 3)).join(', ')
+      : null,
+    onClick: () => openTemplateEditor(t),
+  })));
+  tplCard.appendChild(h('button', { class: 'btn btn-sm btn-block', onClick: () => openTemplateEditor(null) }, '＋ New template'));
+  wrap.appendChild(tplCard);
 
   // Units
   const mk = (u) => h('button', { class: 'pill' + (unit() === u ? ' active' : ''), onClick: async () => {
@@ -1088,36 +1139,77 @@ RENDER.settings = async function () {
   return wrap;
 };
 
-async function openSplitEditor(day) {
-  await getExercises();
-  const selected = day.exercises.map((e) => e.id);
-  const title = h('input', { value: day.title || '', placeholder: 'Day name (e.g. Upper, Lower, Rest)' });
-  const grp = h('div', { class: 'pill-grp' });
-  const draw = () => {
-    clear(grp);
-    const list = activeExercises();
-    if (!list.length) { grp.appendChild(h('p', { class: 'muted tiny' }, 'Add exercises first in Machines & Exercises.')); return; }
-    list.forEach((ex) => {
-      const on = selected.includes(ex.id);
-      grp.appendChild(h('button', { class: 'pill' + (on ? ' active' : ''), onClick: () => {
-        const i = selected.indexOf(ex.id);
-        if (i >= 0) selected.splice(i, 1); else selected.push(ex.id);
-        draw();
-      } }, ex.name));
-    });
-  };
-  draw();
-  const save = async () => {
+// Assign a workout template (or rest) to one weekday.
+function openDayAssignSheet(day, templates) {
+  const assign = async (templateId) => {
     try {
-      await api.put('/split/' + day.weekday, { title: title.value.trim() || null, exercise_ids: selected });
+      await api.put('/split/' + day.weekday, { template_id: templateId });
       s.close(); toast('Saved', 'ok'); refresh();
     } catch (e) { toast(e.message, 'err'); }
   };
-  const s = sheet({ title: `Edit ${dayName(day.weekday)}`, body: h('div', { class: 'stack' },
-    field('Day name', title),
-    h('div', { class: 'muted tiny' }, 'Tap to add or remove exercises. Select none for a rest day.'),
-    grp,
-    h('button', { class: 'btn btn-primary btn-block', onClick: save }, 'Save day')) });
+  const body = h('div', { class: 'stack' });
+  templates.forEach((t) => body.appendChild(h('button', { class: 'row', style: { margin: '0' }, onClick: () => assign(t.id) },
+    h('div', { class: 'row-main' },
+      h('div', { class: 'row-title' }, t.name, day.template_id === t.id ? h('span', { class: 'badge green', style: { marginLeft: '8px' } }, '✓ current') : null),
+      h('div', { class: 'row-sub' }, t.exercises.map((e) => e.name).join(', ') || 'No exercises yet')))));
+  body.appendChild(h('button', { class: 'btn btn-block', onClick: () => assign(null) },
+    '😴 Rest day', day.template_id == null ? ' ✓' : ''));
+  const s = sheet({ title: dayName(day.weekday), body });
+}
+
+// Create/edit a workout template: rename, add/remove exercises, reorder.
+async function openTemplateEditor(tpl) {
+  await getExercises();
+  const selected = tpl ? tpl.exercises.map((e) => e.id) : [];
+  const name = h('input', { value: tpl ? tpl.name : '', placeholder: 'e.g. Push' });
+  const listBox = h('div', null);
+  const pillBox = h('div', { class: 'pill-grp' });
+  const exName = (id) => ((exercisesCache || []).find((e) => e.id === id) || {}).name || 'Exercise';
+
+  const draw = () => {
+    clear(listBox);
+    if (!selected.length) listBox.appendChild(h('p', { class: 'muted tiny', style: { margin: '2px 0' } }, 'No exercises yet — add some below.'));
+    selected.forEach((id, i) => {
+      listBox.appendChild(h('div', { class: 'order-item' },
+        h('span', { class: 'nm' }, `${i + 1}. ${exName(id)}`),
+        h('button', { title: 'Move up', disabled: i === 0, onClick: () => { selected.splice(i - 1, 0, selected.splice(i, 1)[0]); draw(); } }, '↑'),
+        h('button', { title: 'Move down', disabled: i === selected.length - 1, onClick: () => { selected.splice(i + 1, 0, selected.splice(i, 1)[0]); draw(); } }, '↓'),
+        h('button', { class: 'rm', title: 'Remove', onClick: () => { selected.splice(i, 1); draw(); } }, '✕')));
+    });
+    clear(pillBox);
+    activeExercises().filter((e) => !selected.includes(e.id)).forEach((e) =>
+      pillBox.appendChild(h('button', { class: 'pill', onClick: () => { selected.push(e.id); draw(); } }, e.name)));
+  };
+  draw();
+
+  const save = async () => {
+    const nm = name.value.trim();
+    if (!nm) { toast('Name is required', 'err'); return; }
+    try {
+      if (tpl) await api.patch('/templates/' + tpl.id, { name: nm, exercise_ids: selected });
+      else await api.post('/templates', { name: nm, exercise_ids: selected });
+      s.close(); toast('Saved', 'ok'); refresh();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  const actions = [h('button', { class: 'btn btn-primary btn-block', onClick: save }, tpl ? 'Save template' : 'Add template')];
+  if (tpl) {
+    actions.push(h('button', { class: 'btn btn-danger btn-block', onClick: async () => {
+      const used = tpl.used_on && tpl.used_on.length;
+      const msg = `Delete "${tpl.name}"?${used ? ' Days scheduled with it become rest days.' : ''}`;
+      if (!(await confirmDialog(msg, { danger: true, okText: 'Delete' }))) return;
+      try { await api.del('/templates/' + tpl.id); s.close(); toast('Deleted'); refresh(); } catch (e) { toast(e.message, 'err'); }
+    } }, 'Delete template'));
+  }
+
+  const s = sheet({ title: tpl ? 'Edit template' : 'New template', body: h('div', { class: 'stack' },
+    field('Name', name),
+    h('div', { class: 'card-title', style: { margin: '4px 0 0' } }, 'Exercises (in order)'),
+    listBox,
+    h('div', { class: 'card-title', style: { margin: '8px 0 0' } }, 'Add exercises'),
+    pillBox,
+    h('button', { class: 'btn btn-sm', onClick: () => openExerciseForm(null, (created) => { selected.push(created.id); draw(); }) }, '＋ New machine / exercise'),
+    ...actions) });
 }
 
 /* ============================ ABOUT ============================ */
